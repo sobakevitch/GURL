@@ -21,15 +21,42 @@ import (
 )
 
 var (
-	useragent  = "GURL"
+	useragent  string
 	p12Path    string
+	method     string
 	url        string
 	output     string
+	data       string
+	datafile   string
 	caroot     string
 	errlog     *log.Logger
 	showHeader bool
 	status     bool
 )
+
+func initTLS() tls.Config {
+
+	var config tls.Config
+	if p12Path != "" {
+		p12, err := ioutil.ReadFile(p12Path)
+		if err != nil {
+			panic(err)
+		}
+		password := askPassword("PKCS#12 password: ")
+		cert := getPemData(p12, password)
+		config.Certificates = []tls.Certificate{cert}
+	}
+	if caroot != "" {
+		caPool := x509.NewCertPool()
+		serverCert, err := ioutil.ReadFile(caroot)
+		if err != nil {
+			panic(err)
+		}
+		caPool.AppendCertsFromPEM(serverCert)
+		config.RootCAs = caPool
+	}
+	return config
+}
 
 func askPassword(label string) string {
 	fmt.Print(label)
@@ -72,7 +99,7 @@ func copyRemoteFile(header http.Header, body io.Reader) {
 	var out io.Writer
 	var err error
 
-	if output != "" && status {
+	if output != "" && status && header.Get("Content-Length") != "" {
 		size, err := strconv.ParseInt(header.Get("Content-Length"), 10, 64)
 		if err != nil {
 			panic(err)
@@ -95,15 +122,32 @@ func copyRemoteFile(header http.Header, body io.Reader) {
 	io.Copy(out, rd)
 }
 
+func getPostBody() io.Reader {
+	var rd io.Reader
+	if data != "" {
+		method = "POST"
+		rd = strings.NewReader(data)
+	} else {
+		rd = nil
+	}
+	return rd
+}
+
+func setReqHeader(req *http.Request) {
+	req.Header.Set("User-Agent", useragent)
+}
+
 func init() {
 	errlog = log.New(os.Stderr, "", 0)
 
 	flag.BoolVarP(&showHeader, "header", "i", false, "show HTTP headers")
 	flag.BoolVarP(&status, "status", "s", false, "show a progress bar, only valid with --output")
-	flag.StringVarP(&useragent, "user-agent", "A", "", "Set the User-Agent string (default: GURL)")
+	flag.StringVarP(&useragent, "user-agent", "A", "GURL", "Set the User-Agent string")
 	flag.StringVar(&p12Path, "p12", "", "Path to a p12 file")
 	flag.StringVar(&caroot, "caroot", "", "CA root")
 	flag.StringVarP(&output, "output", "o", "", "Output file to write the content of the retrieved URL")
+	flag.StringVarP(&data, "data", "d", "", "Data to send in a POST, PUSH, PUT method-like")
+	flag.StringVarP(&method, "method", "X", "GET", "HTTP method to send")
 
 	flag.Parse()
 	if flag.NArg() > 0 {
@@ -116,37 +160,21 @@ func init() {
 
 func main() {
 
-	var config tls.Config
-	if p12Path != "" {
-		p12, err := ioutil.ReadFile(p12Path)
-		if err != nil {
-			panic(err)
-		}
-		password := askPassword("PKCS#12 password: ")
-		cert := getPemData(p12, password)
-		config.Certificates = []tls.Certificate{cert}
-	}
-	if caroot != "" {
-		caPool := x509.NewCertPool()
-		severCert, err := ioutil.ReadFile(caroot)
-		if err != nil {
-			panic(err)
-		}
-		caPool.AppendCertsFromPEM(severCert)
-		config.RootCAs = caPool
-	}
+	tlsconfig := initTLS()
+	postbody := getPostBody()
 
 	tr := &http.Transport{
 		Proxy:           http.ProxyFromEnvironment,
-		TLSClientConfig: &config,
+		TLSClientConfig: &tlsconfig,
 	}
 	client := &http.Client{Transport: tr}
 
-	req, err := http.NewRequest("GET", url, nil)
+	req, err := http.NewRequest(method, url, postbody)
 	if err != nil {
 		panic(err)
 	}
-	req.Header.Set("User-Agent", useragent)
+
+	setReqHeader(req)
 
 	resp, err := client.Do(req)
 	if err != nil {
@@ -159,5 +187,4 @@ func main() {
 	}
 
 	copyRemoteFile(resp.Header, resp.Body)
-
 }

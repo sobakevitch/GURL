@@ -3,7 +3,7 @@ PROJECT?=hatter/gurl
 GOOS?=linux
 GOARCH?=amd64
 
-all: build
+all: build windows
 
 clean:
 	/bin/rm -f ${APP} ${APP}.exe
@@ -16,6 +16,6 @@ build: clean
 test:
 	go test -v -race ./...
 
-windows:
+windows: clean
 	CGO_ENABLED=0 GOOS=windows GOARCH=${GOARCH} go build -o ${APP}.exe
 	
